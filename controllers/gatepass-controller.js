@@ -12,68 +12,97 @@ exports.createRequest = (req, res) => {
     visitor_type,
     valid_till,
     valid_from,
-    device_permission
+    device_permission,
+    initiator_name,
+    initiator_dept
   } = req.body;
 
+  const year = new Date().getFullYear();
+
+  // 🔎 Find last number used this year
   db.query(
-    `INSERT INTO gate_pass 
-    (user_id, visitor_name, visitor_company, purpose, area_of_visit,
-     department_code, visitor_type, valid_till, valid_from, device_permission)
-     VALUES (?,?,?,?,?,?,?,?,?,?)`,
-    [
-      req.user.id,
-      visitor_name,
-      visitor_company,
-      purpose,
-      area_of_visit,
-      department_code,
-      visitor_type,
-      valid_till,
-      valid_from,
-      device_permission
-    ],
-    (err) => {
-      if (err) {
-        console.error(err);
-        return res.status(500).json(err);
-      }
-      res.json({ message: "Gate pass requested" });
+    `SELECT MAX(gate_pass_no) AS lastNo
+     FROM gate_pass
+     WHERE gate_pass_year = ?`,
+    [year],
+    (err, result) => {
+      if (err) return res.status(500).json(err);
+
+      const nextNo = (result[0].lastNo || 0) + 1;
+
+      // ➕ Insert with yearly number
+      db.query(
+        `INSERT INTO gate_pass 
+        (user_id, visitor_name, visitor_company, purpose, area_of_visit,
+         department_code, visitor_type, valid_till, valid_from, device_permission,
+         initiator_name, initiator_dept, gate_pass_no, gate_pass_year)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        [
+          req.user.id,
+          visitor_name,
+          visitor_company,
+          purpose,
+          area_of_visit,
+          department_code,
+          visitor_type,
+          valid_till,
+          valid_from,
+          device_permission,
+          initiator_name,
+          initiator_dept,
+          nextNo,
+          year
+        ],
+        (err) => {
+          if (err) return res.status(500).json(err);
+
+          res.json({
+            message: "Gate pass requested",
+            gate_pass_no: nextNo,
+            gate_pass_year: year
+          });
+        }
+      );
     }
   );
 };
 
-
 /* ADMIN: get pending requests */
 exports.getPending = (req, res) => {
-  console.log("AUTH USER:", req.user);
-
   db.query(
-    `SELECT gp.*, u.name, u.department
+    `SELECT gp.*
      FROM gate_pass gp
-     JOIN users u ON gp.user_id = u.id
-     WHERE gp.status = 'PENDING'
-     ORDER BY gp.created_at DESC`,
+     WHERE CURDATE() BETWEEN gp.valid_from AND gp.valid_till
+       AND NOT EXISTS (
+         SELECT 1 FROM gate_pass_logs gpl
+         WHERE gpl.gate_pass_id = gp.id
+           AND gpl.log_date = CURDATE()
+       )
+     ORDER BY gp.valid_from`,
     (err, results) => {
       if (err) return res.status(500).json(err);
       res.json(results);
     }
   );
 };
+
 
 /* ADMIN: get approved requests */
 exports.getApproved = (req, res) => {
   db.query(
-    `SELECT gp.*, u.name, u.department
+    `SELECT gp.*, gpl.entry_time, gpl.exit_time, gpl.photo_path
      FROM gate_pass gp
-     JOIN users u ON gp.user_id = u.id
-     WHERE gp.status = 'APPROVED'
-     ORDER BY gp.created_at DESC`,
+     JOIN gate_pass_logs gpl
+       ON gpl.gate_pass_id = gp.id
+     WHERE gpl.log_date = CURDATE()
+     ORDER BY gpl.entry_time`,
     (err, results) => {
       if (err) return res.status(500).json(err);
       res.json(results);
     }
   );
 };
+
 
 /* ADMIN: approve with photo */
 exports.approveRequest = (req, res) => {
@@ -115,20 +144,24 @@ exports.getReportData = (req, res) => {
 
   db.query(
     `SELECT 
-      gp.id,
-      gp.visitor_name,
-      gp.visitor_company,
-      gp.department_code,
-      gp.visitor_type,
-      gp.device_permission,
-      gp.purpose,
-      gp.valid_till,
-      gp.valid_from,
-      gp.status,
-      gp.created_at,
-      u.name AS requested_by
+        gp.id,
+        gp.gate_pass_no,
+        gp.gate_pass_year,
+        gp.visitor_name,
+        gp.visitor_company,
+        gp.department_code,
+        gp.purpose,
+        gp.device_permission,
+        gp.status,
+        gp.created_at,
+
+        gpl.entry_time,
+        gpl.exit_time
+
      FROM gate_pass gp
-     JOIN users u ON gp.user_id = u.id
+     LEFT JOIN gate_pass_logs gpl 
+       ON gpl.gate_pass_id = gp.id
+
      WHERE DATE(gp.created_at) BETWEEN ? AND ?
      ORDER BY gp.created_at DESC`,
     [from, to],
@@ -138,6 +171,7 @@ exports.getReportData = (req, res) => {
     }
   );
 };
+
 
 /* SEARCH valid visitors for TODAY */
 exports.searchValidVisitors = (req, res) => {
@@ -167,8 +201,8 @@ exports.markIn = (req, res) => {
 
   db.query(
     `INSERT INTO gate_pass_logs
-     (gate_pass_id, log_date, entry_time, photo_path)
-     VALUES (?, CURDATE(), NOW(), ?)`,
+     (gate_pass_id, log_date, entry_time, photo_path, status)
+     VALUES (?, CURDATE(), NOW(), ?, 'IN')`,
     [gate_pass_id, photo],
     (err) => {
       if (err)
@@ -186,7 +220,7 @@ exports.markOut = (req, res) => {
 
   db.query(
     `UPDATE gate_pass_logs
-     SET exit_time = NOW()
+     SET exit_time = NOW(), status = 'OUT'
      WHERE gate_pass_id = ?
        AND log_date = CURDATE()
        AND exit_time IS NULL`,
@@ -216,3 +250,15 @@ exports.getTodayLog = (req, res) => {
   );
 };
 
+exports.autoCancelNoShows = (req, res) => {
+  db.query(
+    `UPDATE gate_pass_logs
+     SET status = 'CANCELLED'
+     WHERE log_date < CURDATE()
+       AND entry_time IS NULL`,
+    (err, result) => {
+      if (err) return res.status(500).json(err);
+      res.json({ cancelled: result.affectedRows });
+    }
+  );
+};

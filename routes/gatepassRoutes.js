@@ -59,4 +59,12 @@ router.put(
   ctrl.approveRequest
 );
 
+router.post(
+  "/auto-cancel",
+  auth,
+  role("ADMIN"),
+  ctrl.autoCancelNoShows
+);
+
+
 module.exports = router;
