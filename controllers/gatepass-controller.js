@@ -78,13 +78,14 @@ exports.getPending = (req, res) => {
          WHERE gpl.gate_pass_id = gp.id
            AND gpl.log_date = CURDATE()
        )
-     ORDER BY gp.valid_from`,
+     ORDER BY gp.valid_from DESC`,
     (err, results) => {
       if (err) return res.status(500).json(err);
       res.json(results);
     }
   );
 };
+
 
 
 /* ADMIN: get approved requests */
@@ -95,13 +96,14 @@ exports.getApproved = (req, res) => {
      JOIN gate_pass_logs gpl
        ON gpl.gate_pass_id = gp.id
      WHERE gpl.log_date = CURDATE()
-     ORDER BY gpl.entry_time`,
+     ORDER BY gpl.entry_time DESC`,
     (err, results) => {
       if (err) return res.status(500).json(err);
       res.json(results);
     }
   );
 };
+
 
 
 /* ADMIN: approve with photo */

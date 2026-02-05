@@ -13,4 +13,4 @@ app.use("/uploads", (req, res, next) => {
 app.use("/api/auth", require("./routes/authRoutes"));
 app.use("/api/gatepass", require("./routes/gatepassRoutes"));
 
-app.listen(5005, () => console.log("Server running on 5005"));
+app.listen(8001,"0.0.0.0", () => console.log("Server running on 8001"));
